@@ -27,6 +27,18 @@ async function main(argv: readonly string[]): Promise<void> {
   await writeFile(outputPath, report, "utf8");
   console.log(`Wrote ${outputPath}`);
 
+  if (options.jsonOutput !== undefined) {
+    const jsonOutputPath = resolve(process.cwd(), options.jsonOutput);
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      status: getJsonStatus(facts.riskCategories.length, facts.statusLines.length, verified),
+      facts,
+      verified
+    };
+    await writeFile(jsonOutputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    console.log(`Wrote ${jsonOutputPath}`);
+  }
+
   if (!options.run && facts.commands.length > 0) {
     console.log("Discovered commands were not run. Re-run with --run to verify them.");
   }
@@ -35,6 +47,7 @@ async function main(argv: readonly string[]): Promise<void> {
 function parseOptions(args: readonly string[]): CliOptions {
   let base = "main";
   let output = "readiness-report.md";
+  let jsonOutput: string | undefined;
   let run = false;
   let maxCommandSeconds = 90;
 
@@ -57,6 +70,12 @@ function parseOptions(args: readonly string[]): CliOptions {
       continue;
     }
 
+    if (arg === "--json-output") {
+      jsonOutput = readOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
+
     if (arg === "--max-command-seconds") {
       const value = Number(readOptionValue(args, index, arg));
       if (!Number.isInteger(value) || value < 1) {
@@ -70,7 +89,25 @@ function parseOptions(args: readonly string[]): CliOptions {
     throw new Error(`Unknown option: ${arg ?? ""}`);
   }
 
-  return { base, output, run, maxCommandSeconds };
+  return jsonOutput === undefined
+    ? { base, output, run, maxCommandSeconds }
+    : { base, output, jsonOutput, run, maxCommandSeconds };
+}
+
+function getJsonStatus(
+  riskCategoryCount: number,
+  statusLineCount: number,
+  verified: readonly { readonly exitCode: number | null; readonly timedOut: boolean }[]
+): "not_ready" | "ready_with_caveats" | "ready" {
+  if (verified.some((result) => result.exitCode !== 0 || result.timedOut)) {
+    return "not_ready";
+  }
+
+  if (verified.length === 0 || riskCategoryCount > 0 || statusLineCount > 0) {
+    return "ready_with_caveats";
+  }
+
+  return "ready";
 }
 
 function readOptionValue(args: readonly string[], index: number, optionName: string): string {
@@ -83,7 +120,7 @@ function readOptionValue(args: readonly string[], index: number, optionName: str
 
 function printHelp(): void {
   console.log(`Usage:
-  readiness audit [--base main] [--output readiness-report.md] [--run] [--max-command-seconds 90]
+  readiness audit [--base main] [--output readiness-report.md] [--json-output report.json] [--run] [--max-command-seconds 90]
 
 Commands:
   readiness audit    Inspect the current git repository and write a readiness report.

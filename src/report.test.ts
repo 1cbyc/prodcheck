@@ -9,6 +9,11 @@ test("report separates verified and recommended checks", () => {
     branch: "feature/release",
     statusLines: ["M src/auth/session.ts"],
     baseRef: "main",
+    comparison: {
+      mode: "base-ref",
+      requestedBaseRef: "main",
+      effectiveBaseRef: "abc123def456"
+    },
     changedFiles: ["src/auth/session.ts", "package-lock.json"],
     packageManagers: ["npm"],
     languages: ["TypeScript"],

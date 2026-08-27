@@ -26,6 +26,7 @@ Options:
 ```sh
 readiness audit --base main --output readiness-report.md
 readiness audit --run --max-command-seconds 120
+readiness audit --json-output readiness-report.json
 ```
 
 ## What It Checks
@@ -45,3 +46,5 @@ readiness audit --run --max-command-seconds 120
 The report is written to `readiness-report.md` unless another output path is passed.
 
 It is meant to be pasted into a PR, release note, or deployment checklist.
+
+For concrete usage patterns, see [Real-world use](docs/real-world-use.md).

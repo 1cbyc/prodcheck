@@ -20,6 +20,7 @@ export function renderReport(facts: RepoFacts, verified: readonly CommandResult[
 - Root: ${facts.root}
 - Branch: ${facts.branch}
 - Base: ${facts.baseRef}
+- Comparison: ${formatComparison(facts)}
 - Working tree: ${facts.statusLines.length === 0 ? "Clean" : "Has local changes"}
 
 ## What Changed
@@ -71,6 +72,15 @@ function describeMainRisk(categories: readonly RiskCategory[]): string {
   const priority: readonly RiskCategory[] = ["secrets", "migrations", "auth", "billing", "webhooks", "deployment", "database", "routing"];
   const category = priority.find((item) => categories.includes(item)) ?? categories[0];
   return category === undefined ? "No main risk identified." : `Changes touch ${category}.`;
+}
+
+function formatComparison(facts: RepoFacts): string {
+  const { comparison } = facts;
+  if (comparison.mode === "base-ref" && comparison.effectiveBaseRef !== undefined) {
+    return `Compared with merge base ${comparison.effectiveBaseRef.slice(0, 12)} from ${comparison.requestedBaseRef}.`;
+  }
+
+  return comparison.note ?? `Used ${comparison.mode}.`;
 }
 
 function hasAny(values: readonly RiskCategory[], candidates: readonly RiskCategory[]): boolean {

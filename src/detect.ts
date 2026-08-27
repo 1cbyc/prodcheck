@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { listRepoFiles } from "./fs.js";
 import { runGit } from "./shell.js";
-import type { ProjectCommand, RepoFacts, RiskCategory, ScriptKind } from "./types.js";
+import type { ComparisonFacts, ProjectCommand, RepoFacts, RiskCategory, ScriptKind } from "./types.js";
 
 const SCRIPT_NAMES = {
   test: ["test"],
@@ -15,13 +15,15 @@ const SCRIPT_NAMES = {
 export async function collectRepoFacts(root: string, baseRef: string): Promise<RepoFacts> {
   const repoRoot = await getRepoRoot(root);
   const files = await listRepoFiles(repoRoot);
-  const changedFiles = await getChangedFiles(repoRoot, baseRef);
+  const comparison = await getComparisonFacts(repoRoot, baseRef);
+  const changedFiles = await getChangedFiles(repoRoot, comparison);
 
   return {
     root: repoRoot,
     branch: await getBranch(repoRoot),
     statusLines: await getStatus(repoRoot),
     baseRef,
+    comparison,
     changedFiles,
     packageManagers: detectPackageManagers(files),
     languages: detectLanguages(files),
@@ -53,20 +55,45 @@ async function getStatus(root: string): Promise<readonly string[]> {
   return lines(result.stdout);
 }
 
-async function getChangedFiles(root: string, baseRef: string): Promise<readonly string[]> {
+async function getComparisonFacts(root: string, baseRef: string): Promise<ComparisonFacts> {
   const hasHead = await runGit(["rev-parse", "--verify", "HEAD"], root);
   if (hasHead.exitCode !== 0) {
+    return {
+      mode: "unborn-branch",
+      requestedBaseRef: baseRef,
+      note: "Repository has no commits yet, so tracked and untracked files were treated as changed."
+    };
+  }
+
+  const mergeBase = await runGit(["merge-base", "HEAD", baseRef], root);
+  if (mergeBase.exitCode === 0) {
+    return {
+      mode: "base-ref",
+      requestedBaseRef: baseRef,
+      effectiveBaseRef: mergeBase.stdout.trim()
+    };
+  }
+
+  return {
+    mode: "working-tree",
+    requestedBaseRef: baseRef,
+    note: `Could not find a merge base with ${baseRef}, so only working-tree changes were inspected.`
+  };
+}
+
+async function getChangedFiles(root: string, comparison: ComparisonFacts): Promise<readonly string[]> {
+  if (comparison.mode === "unborn-branch") {
     const tracked = await runGit(["ls-files"], root);
     const untracked = await runGit(["ls-files", "--others", "--exclude-standard"], root);
     return unique([...lines(tracked.stdout), ...lines(untracked.stdout)]);
   }
 
-  const mergeBase = await runGit(["merge-base", "HEAD", baseRef], root);
-  const diffBase = mergeBase.exitCode === 0 ? mergeBase.stdout.trim() : baseRef;
-  const result = await runGit(["diff", "--name-only", `${diffBase}...HEAD`], root);
+  if (comparison.mode === "base-ref" && comparison.effectiveBaseRef !== undefined) {
+    const result = await runGit(["diff", "--name-only", `${comparison.effectiveBaseRef}...HEAD`], root);
 
-  if (result.exitCode === 0 && result.stdout.trim().length > 0) {
-    return lines(result.stdout);
+    if (result.exitCode === 0 && result.stdout.trim().length > 0) {
+      return lines(result.stdout);
+    }
   }
 
   const stagedAndUnstaged = await runGit(["diff", "--name-only", "HEAD"], root);
@@ -145,7 +172,15 @@ function isCiFile(file: string): boolean {
 }
 
 function isDeploymentFile(file: string): boolean {
-  return /(^|\/)(Dockerfile|docker-compose[^/]*\.ya?ml|fly\.toml|render\.ya?ml|vercel\.json|netlify\.toml|wrangler\.toml|Procfile|k8s|helm|terraform|infra)/i.test(file);
+  if (/(^|\/)(Dockerfile|docker-compose[^/]*\.ya?ml|fly\.toml|render\.ya?ml|vercel\.json|netlify\.toml|wrangler\.toml|Procfile)$/i.test(file)) {
+    return true;
+  }
+
+  if (/^(deploy|deployment|infra|infrastructure|terraform|k8s|kubernetes|helm|charts)(\/|$)/i.test(file)) {
+    return true;
+  }
+
+  return /(^|\/)\.github\/workflows\/.*(deploy|release|publish).*\.ya?ml$/i.test(file);
 }
 
 function isEnvSurface(file: string): boolean {
@@ -163,7 +198,7 @@ function detectRiskCategories(files: readonly string[]): readonly RiskCategory[]
     ["billing", /billing|checkout|subscription|invoice|payment|stripe|polar/i],
     ["webhooks", /webhook|callback/i],
     ["migrations", /migration|alembic|prisma|schema\.sql|db\/migrate/i],
-    ["deployment", /Dockerfile|docker-compose|deploy|infra|terraform|k8s|helm|vercel|render|fly\.toml|wrangler/i],
+    ["deployment", /(^|\/)(Dockerfile|docker-compose[^/]*\.ya?ml|fly\.toml|render\.ya?ml|vercel\.json|netlify\.toml|wrangler\.toml|Procfile)$|^(deploy|deployment|infra|infrastructure|terraform|k8s|kubernetes|helm|charts)(\/|$)|(^|\/)\.github\/workflows\/.*(deploy|release|publish).*\.ya?ml$/i],
     ["secrets", /\.env|secret|token|credential|private[_-]?key/i],
     ["routing", /routes?|router|middleware|app\/.*page|pages\/|api\//i],
     ["dependencies", /package-lock|pnpm-lock|yarn\.lock|bun\.lock|requirements|poetry\.lock|go\.sum|Cargo\.lock/i],
