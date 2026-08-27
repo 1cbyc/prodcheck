@@ -1,6 +1,6 @@
 # prodcheck
 
-`prodcheck` is a local-first production-readiness checker for repositories and release candidates.
+`prodcheck` is a local-first prod readiness checker for repos and release candidates.
 
 It audits the current git repository, identifies project shape and risky change areas, then writes a Markdown report that separates verified evidence from recommended checks.
 
