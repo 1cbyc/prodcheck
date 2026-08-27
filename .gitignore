@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+readiness-report.md
+.DS_Store
+*.log

@@ -1,0 +1,26 @@
+{
+  "name": "prodcheck",
+  "version": "0.1.0",
+  "description": "Local production-readiness reports for repositories and release candidates.",
+  "type": "module",
+  "bin": {
+    "readiness": "./dist/cli.js",
+    "prodcheck": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/**/*.test.js",
+    "check": "npm run typecheck && npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  }
+}
