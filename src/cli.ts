@@ -3,9 +3,11 @@ import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { collectRepoFacts } from "./detect.js";
 import { collectGitHubFacts } from "./github.js";
+import { renderPrComment } from "./pr-comment.js";
 import { buildSummary, renderReport } from "./report.js";
 import { runProjectCommands } from "./runner.js";
-import type { CliOptions, ScriptKind } from "./types.js";
+import { runSmokeChecks } from "./smoke.js";
+import type { CliOptions, ProdcheckConfig, ScriptKind } from "./types.js";
 
 async function main(argv: readonly string[]): Promise<void> {
   const [command, subcommand, ...rest] = argv;
@@ -18,34 +20,43 @@ async function main(argv: readonly string[]): Promise<void> {
   }
 
   const options = parseOptions(args);
-  const initialFacts = await collectRepoFacts(process.cwd(), options.base);
-  const githubFacts = options.github ? await collectGitHubFacts(initialFacts.root) : undefined;
+  const initialFacts = await collectRepoFacts(process.cwd(), options.base, options.configPath);
+  const effectiveOptions = applyConfigDefaults(options, initialFacts.config);
+  const githubFacts = effectiveOptions.github ? await collectGitHubFacts(initialFacts.root) : undefined;
   const facts = githubFacts === undefined ? initialFacts : { ...initialFacts, github: githubFacts };
-  const commandsToRun = options.runKinds.length > 0
-    ? facts.commands.filter((command) => options.runKinds.includes(command.kind))
+  const commandsToRun = effectiveOptions.runKinds.length > 0
+    ? facts.commands.filter((command) => effectiveOptions.runKinds.includes(command.kind))
     : facts.commands;
-  const verified = options.run
-    ? await runProjectCommands(commandsToRun, facts.root, options.maxCommandSeconds)
+  const verified = effectiveOptions.run
+    ? await runProjectCommands(commandsToRun, facts.root, effectiveOptions.maxCommandSeconds)
     : [];
-  const report = renderReport(facts, verified);
-  const outputPath = resolve(process.cwd(), options.output);
+  const smokeResults = await runSmokeChecks(effectiveOptions.smokeUrls);
+  const report = renderReport(facts, verified, smokeResults);
+  const outputPath = resolve(process.cwd(), effectiveOptions.output);
 
   await writeFile(outputPath, report, "utf8");
   console.log(`Wrote ${outputPath}`);
 
-  if (options.jsonOutput !== undefined) {
-    const jsonOutputPath = resolve(process.cwd(), options.jsonOutput);
+  if (effectiveOptions.jsonOutput !== undefined) {
+    const jsonOutputPath = resolve(process.cwd(), effectiveOptions.jsonOutput);
     const payload = {
       generatedAt: new Date().toISOString(),
-      summary: buildSummary(facts, verified),
+      summary: buildSummary(facts, verified, smokeResults),
       facts,
-      verified
+      verified,
+      smokeResults
     };
     await writeFile(jsonOutputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
     console.log(`Wrote ${jsonOutputPath}`);
   }
 
-  if (!options.run && facts.commands.length > 0) {
+  if (effectiveOptions.prCommentOutput !== undefined) {
+    const prCommentOutputPath = resolve(process.cwd(), effectiveOptions.prCommentOutput);
+    await writeFile(prCommentOutputPath, renderPrComment(facts, verified, smokeResults), "utf8");
+    console.log(`Wrote ${prCommentOutputPath}`);
+  }
+
+  if (!effectiveOptions.run && facts.commands.length > 0) {
     console.log("Discovered commands were not run. Re-run with --run to verify them.");
   }
 }
@@ -54,9 +65,12 @@ function parseOptions(args: readonly string[]): CliOptions {
   let base = "main";
   let output = "readiness-report.md";
   let jsonOutput: string | undefined;
+  let prCommentOutput: string | undefined;
+  let configPath: string | undefined;
   let run = false;
   let github = false;
   let runKinds: readonly ScriptKind[] = [];
+  let smokeUrls: readonly string[] = [];
   let maxCommandSeconds = 90;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -89,9 +103,27 @@ function parseOptions(args: readonly string[]): CliOptions {
       continue;
     }
 
+    if (arg === "--pr-comment-output") {
+      prCommentOutput = readOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--config") {
+      configPath = readOptionValue(args, index, arg);
+      index += 1;
+      continue;
+    }
+
     if (arg === "--run-kind") {
       runKinds = parseRunKinds(readOptionValue(args, index, arg));
       run = true;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--smoke-url") {
+      smokeUrls = [...smokeUrls, readOptionValue(args, index, arg)];
       index += 1;
       continue;
     }
@@ -109,9 +141,35 @@ function parseOptions(args: readonly string[]): CliOptions {
     throw new Error(`Unknown option: ${arg ?? ""}`);
   }
 
-  return jsonOutput === undefined
-    ? { base, output, run, runKinds, github, maxCommandSeconds }
-    : { base, output, jsonOutput, run, runKinds, github, maxCommandSeconds };
+  return {
+    base,
+    output,
+    ...(jsonOutput === undefined ? {} : { jsonOutput }),
+    ...(prCommentOutput === undefined ? {} : { prCommentOutput }),
+    ...(configPath === undefined ? {} : { configPath }),
+    run,
+    runKinds,
+    github,
+    smokeUrls,
+    maxCommandSeconds
+  };
+}
+
+function applyConfigDefaults(options: CliOptions, config: ProdcheckConfig): CliOptions {
+  return {
+    base: options.base === "main" ? config.base ?? options.base : options.base,
+    output: options.output === "readiness-report.md" ? config.output ?? options.output : options.output,
+    ...(options.jsonOutput === undefined && config.jsonOutput !== undefined ? { jsonOutput: config.jsonOutput } : {}),
+    ...(options.jsonOutput !== undefined ? { jsonOutput: options.jsonOutput } : {}),
+    ...(options.prCommentOutput === undefined && config.prCommentOutput !== undefined ? { prCommentOutput: config.prCommentOutput } : {}),
+    ...(options.prCommentOutput !== undefined ? { prCommentOutput: options.prCommentOutput } : {}),
+    ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
+    run: options.run,
+    runKinds: options.runKinds.length === 0 ? config.runKinds ?? [] : options.runKinds,
+    github: options.github || config.github === true,
+    smokeUrls: options.smokeUrls.length === 0 ? config.smokeUrls ?? [] : options.smokeUrls,
+    maxCommandSeconds: options.maxCommandSeconds
+  };
 }
 
 function readOptionValue(args: readonly string[], index: number, optionName: string): string {
@@ -137,7 +195,7 @@ function parseRunKinds(value: string): readonly ScriptKind[] {
 
 function printHelp(): void {
   console.log(`Usage:
-  readiness audit [--base main] [--output readiness-report.md] [--json-output report.json] [--run] [--run-kind test,typecheck] [--github] [--max-command-seconds 90]
+  readiness audit [--base main] [--output readiness-report.md] [--json-output report.json] [--pr-comment-output pr-comment.md] [--config prodcheck.config.json] [--run] [--run-kind test,typecheck] [--github] [--smoke-url http://localhost:3000] [--max-command-seconds 90]
 
 Commands:
   readiness audit    Inspect the current git repository and write a readiness report.

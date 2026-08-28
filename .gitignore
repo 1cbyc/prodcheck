@@ -2,5 +2,7 @@ node_modules/
 dist/
 coverage/
 readiness-report.md
+readiness-report.json
+readiness-pr-comment.md
 .DS_Store
 *.log

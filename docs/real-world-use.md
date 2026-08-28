@@ -52,6 +52,20 @@ A platform engineer can use the JSON output as input for a CI comment or interna
 
 A solo builder can keep old reports to remember what was checked before a release.
 
+If a team wants project-specific rules, commit a `prodcheck.config.json` file to the repo. Use it for default base branches, smoke URLs, extra commands, and custom risk rules.
+
+If a team wants a compact PR note, generate one separately:
+
+```sh
+readiness audit --base origin/main --github --pr-comment-output readiness-pr-comment.md
+```
+
+If a web app is running locally or in a review environment, add smoke checks:
+
+```sh
+readiness audit --smoke-url http://localhost:3000 --smoke-url https://preview.example.com
+```
+
 ## What It Does Not Prove
 
 `prodcheck` only proves what it actually checked.

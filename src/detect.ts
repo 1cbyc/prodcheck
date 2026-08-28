@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { loadConfig } from "./config.js";
 import { listRepoFiles } from "./fs.js";
 import { findRiskFindings } from "./risk.js";
 import { runGit } from "./shell.js";
+import type { ProdcheckConfig } from "./types.js";
 import type { ComparisonFacts, ProjectCommand, RepoFacts, ScriptKind } from "./types.js";
 
 const SCRIPT_NAMES = {
@@ -13,23 +15,26 @@ const SCRIPT_NAMES = {
   check: ["check", "ci"]
 } as const satisfies Record<ScriptKind, readonly string[]>;
 
-export async function collectRepoFacts(root: string, baseRef: string): Promise<RepoFacts> {
+export async function collectRepoFacts(root: string, baseRef: string, configPath?: string): Promise<RepoFacts> {
   const repoRoot = await getRepoRoot(root);
+  const config = await loadConfig(repoRoot, configPath);
+  const effectiveBase = config.base ?? baseRef;
   const files = await listRepoFiles(repoRoot);
-  const comparison = await getComparisonFacts(repoRoot, baseRef);
+  const comparison = await getComparisonFacts(repoRoot, effectiveBase);
   const changedFiles = await getChangedFiles(repoRoot, comparison);
-  const riskFindings = findRiskFindings(changedFiles);
+  const riskFindings = findRiskFindings(changedFiles, config.riskRules);
 
   return {
     root: repoRoot,
     branch: await getBranch(repoRoot),
     statusLines: await getStatus(repoRoot),
-    baseRef,
+    baseRef: effectiveBase,
     comparison,
     changedFiles,
     packageManagers: detectPackageManagers(files),
     languages: detectLanguages(files),
-    commands: await detectCommands(repoRoot, files),
+    commands: mergeCommands(await detectCommands(repoRoot, files), config),
+    config,
     ciFiles: files.filter(isCiFile),
     deploymentFiles: files.filter(isDeploymentFile),
     envFiles: files.filter(isEnvSurface),
@@ -37,6 +42,10 @@ export async function collectRepoFacts(root: string, baseRef: string): Promise<R
     riskCategories: riskFindings.map((finding) => finding.category),
     riskFindings
   };
+}
+
+function mergeCommands(detectedCommands: readonly ProjectCommand[], config: ProdcheckConfig): readonly ProjectCommand[] {
+  return dedupeCommands([...detectedCommands, ...(config.commands ?? [])]);
 }
 
 async function getRepoRoot(cwd: string): Promise<string> {

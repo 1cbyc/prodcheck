@@ -21,6 +21,7 @@ test("report separates verified and recommended checks", () => {
       { kind: "typecheck", command: "npm run typecheck", source: "package.json" },
       { kind: "test", command: "npm test", source: "package.json" }
     ],
+    config: {},
     ciFiles: [".github/workflows/ci.yml"],
     deploymentFiles: [],
     envFiles: [".env.example"],

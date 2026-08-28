@@ -27,6 +27,8 @@ Options:
 readiness audit --base main --output readiness-report.md
 readiness audit --run --max-command-seconds 120
 readiness audit --json-output readiness-report.json
+readiness audit --pr-comment-output readiness-pr-comment.md
+readiness audit --github --smoke-url https://example.com
 ```
 
 ## What It Checks
@@ -40,6 +42,31 @@ readiness audit --json-output readiness-report.json
 - environment and config surfaces without printing secret values
 - database migrations
 - risky change categories such as auth, billing, webhooks, migrations, deployment, secrets, routing, and dependencies
+- GitHub Actions readback when `--github` is used
+- smoke URL checks when `--smoke-url` or config `smokeUrls` are provided
+- domain check packs for migrations, auth, billing, and webhooks
+
+## Config
+
+Create `prodcheck.config.json` or `.prodcheck.json` in a repository:
+
+```json
+{
+  "base": "origin/main",
+  "github": true,
+  "runKinds": ["typecheck", "lint"],
+  "smokeUrls": ["http://localhost:3000"],
+  "riskRules": [
+    {
+      "category": "backend",
+      "severity": "high",
+      "title": "Queue worker changed",
+      "why": "Worker changes can affect background processing and retries.",
+      "pattern": "^workers/"
+    }
+  ]
+}
+```
 
 ## Report
 
@@ -47,4 +74,4 @@ The report is written to `readiness-report.md` unless another output path is pas
 
 It is meant to be pasted into a PR, release note, or deployment checklist.
 
-For concrete usage patterns, see [Real-world use](docs/real-world-use.md).
+For concrete usage patterns, see [Real-world use](docs/real-world-use.md). For config details, see [Configuration](docs/configuration.md).

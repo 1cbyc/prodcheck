@@ -21,10 +21,13 @@ export type ReadinessStatus = "not_ready" | "ready_with_caveats" | "ready";
 export interface CliOptions {
   readonly base: string;
   readonly output: string;
+  readonly prCommentOutput?: string;
   readonly jsonOutput?: string;
+  readonly configPath?: string;
   readonly run: boolean;
   readonly runKinds: readonly ScriptKind[];
   readonly github: boolean;
+  readonly smokeUrls: readonly string[];
   readonly maxCommandSeconds: number;
 }
 
@@ -41,6 +44,14 @@ export interface CommandResult {
   readonly timedOut: boolean;
 }
 
+export interface SmokeResult {
+  readonly url: string;
+  readonly ok: boolean;
+  readonly status: number | null;
+  readonly durationMs: number;
+  readonly error?: string;
+}
+
 export interface RepoFacts {
   readonly root: string;
   readonly branch: string;
@@ -51,6 +62,7 @@ export interface RepoFacts {
   readonly packageManagers: readonly string[];
   readonly languages: readonly string[];
   readonly commands: readonly ProjectCommand[];
+  readonly config: ProdcheckConfig;
   readonly ciFiles: readonly string[];
   readonly deploymentFiles: readonly string[];
   readonly envFiles: readonly string[];
@@ -100,4 +112,30 @@ export interface ReportSummary {
   readonly status: ReadinessStatus;
   readonly mainRisk: string;
   readonly confidence: string;
+}
+
+export interface ProdcheckConfig {
+  readonly base?: string;
+  readonly output?: string;
+  readonly jsonOutput?: string;
+  readonly prCommentOutput?: string;
+  readonly github?: boolean;
+  readonly runKinds?: readonly ScriptKind[];
+  readonly smokeUrls?: readonly string[];
+  readonly commands?: readonly ProjectCommand[];
+  readonly riskRules?: readonly ConfigRiskRule[];
+}
+
+export interface ConfigRiskRule {
+  readonly category: RiskCategory;
+  readonly severity: Severity;
+  readonly title: string;
+  readonly why: string;
+  readonly pattern: string;
+}
+
+export interface CheckPackFinding {
+  readonly category: RiskCategory;
+  readonly title: string;
+  readonly items: readonly string[];
 }

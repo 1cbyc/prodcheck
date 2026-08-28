@@ -1,4 +1,4 @@
-import type { RiskCategory, RiskFinding, Severity } from "./types.js";
+import type { ConfigRiskRule, RiskCategory, RiskFinding, Severity } from "./types.js";
 
 interface RiskRule {
   readonly category: RiskCategory;
@@ -95,10 +95,17 @@ const RISK_RULES: readonly RiskRule[] = [
   }
 ];
 
-export function findRiskFindings(files: readonly string[]): readonly RiskFinding[] {
+export function findRiskFindings(files: readonly string[], configRules: readonly ConfigRiskRule[] = []): readonly RiskFinding[] {
   const findings: RiskFinding[] = [];
+  const rules: readonly RiskRule[] = [
+    ...RISK_RULES,
+    ...configRules.map((rule) => ({
+      ...rule,
+      pattern: new RegExp(rule.pattern, "i")
+    }))
+  ];
 
-  for (const rule of RISK_RULES) {
+  for (const rule of rules) {
     const matchedFiles = files.filter((file) => rule.pattern.test(file));
     if (matchedFiles.length > 0) {
       findings.push({

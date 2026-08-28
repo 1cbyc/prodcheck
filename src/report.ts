@@ -1,7 +1,9 @@
-import type { CommandResult, GitHubFacts, RepoFacts, ReportSummary, RiskCategory, RiskFinding } from "./types.js";
+import { buildCheckPacks } from "./check-packs.js";
+import type { CheckPackFinding, CommandResult, GitHubFacts, RepoFacts, ReportSummary, RiskCategory, RiskFinding, SmokeResult } from "./types.js";
 
-export function renderReport(facts: RepoFacts, verified: readonly CommandResult[]): string {
-  const summary = buildSummary(facts, verified);
+export function renderReport(facts: RepoFacts, verified: readonly CommandResult[], smokeResults: readonly SmokeResult[] = []): string {
+  const summary = buildSummary(facts, verified, smokeResults);
+  const checkPacks = buildCheckPacks(facts);
 
   return `# Production Readiness Report
 
@@ -40,6 +42,9 @@ ${bulletList(facts.migrationFiles)}
 ## Verified
 ${verified.length === 0 ? "- No project commands were run. Use `readiness audit --run` to run discovered checks." : verified.map(formatCommandResult).join("\n")}
 
+## Smoke Checks
+${formatSmokeResults(smokeResults)}
+
 ## Remote Evidence
 ${formatGitHubFacts(facts.github)}
 
@@ -51,24 +56,31 @@ ${notVerifiedItems(facts, verified).map((item) => `- ${item}`).join("\n")}
 - Migration needed: ${facts.riskCategories.includes("migrations") ? "Likely. Confirm migration order, rollback strategy, and production data impact." : "No migration change detected from changed paths."}
 - Rollback concern: ${rollbackConcern(facts.riskCategories)}
 
+## Check Packs
+${formatCheckPacks(checkPacks)}
+
 ## Recommended Next Steps
-${recommendedSteps(facts, verified).map((step, index) => `${index + 1}. ${step}`).join("\n")}
+${recommendedSteps(facts, verified, smokeResults).map((step, index) => `${index + 1}. ${step}`).join("\n")}
 `;
 }
 
-export function buildSummary(facts: RepoFacts, verified: readonly CommandResult[]): ReportSummary {
-  const status = chooseStatus(facts, verified);
+export function buildSummary(facts: RepoFacts, verified: readonly CommandResult[], smokeResults: readonly SmokeResult[] = []): ReportSummary {
+  const status = chooseStatus(facts, verified, smokeResults);
   return {
     status,
     mainRisk: facts.riskFindings.length > 0
       ? describeMainRisk(facts.riskFindings)
       : "No high-signal risky file category detected from changed paths.",
-    confidence: describeConfidence(facts, verified)
+    confidence: describeConfidence(facts, verified, smokeResults)
   };
 }
 
-function chooseStatus(facts: RepoFacts, verified: readonly CommandResult[]): ReportSummary["status"] {
+function chooseStatus(facts: RepoFacts, verified: readonly CommandResult[], smokeResults: readonly SmokeResult[]): ReportSummary["status"] {
   if (verified.some((result) => result.exitCode !== 0 || result.timedOut)) {
+    return "not_ready";
+  }
+
+  if (smokeResults.some((result) => !result.ok)) {
     return "not_ready";
   }
 
@@ -89,9 +101,13 @@ function formatStatus(status: ReportSummary["status"]): string {
   return "Ready";
 }
 
-function describeConfidence(facts: RepoFacts, verified: readonly CommandResult[]): string {
+function describeConfidence(facts: RepoFacts, verified: readonly CommandResult[], smokeResults: readonly SmokeResult[]): string {
   if (verified.some((result) => result.exitCode !== 0 || result.timedOut)) {
     return "Low: at least one local verification command failed or timed out.";
+  }
+
+  if (smokeResults.some((result) => !result.ok)) {
+    return "Low: at least one smoke check failed.";
   }
 
   if (verified.length > 0 && facts.github?.latestRun?.conclusion === "success" && facts.statusLines.length === 0) {
@@ -165,6 +181,30 @@ function formatGitHubFacts(github: GitHubFacts | undefined): string {
   return lines.join("\n");
 }
 
+function formatSmokeResults(results: readonly SmokeResult[]): string {
+  if (results.length === 0) {
+    return "- No smoke URLs were checked.";
+  }
+
+  return results.map((result) => {
+    const status = result.status === null ? "no HTTP status" : `HTTP ${String(result.status)}`;
+    const outcome = result.ok ? "passed" : "failed";
+    const suffix = result.error === undefined ? "" : `: ${result.error}`;
+    return `- ${result.url}: ${outcome} (${status}, ${(result.durationMs / 1000).toFixed(1)}s)${suffix}`;
+  }).join("\n");
+}
+
+function formatCheckPacks(packs: readonly CheckPackFinding[]): string {
+  if (packs.length === 0) {
+    return "- No domain-specific pack was triggered.";
+  }
+
+  return packs.map((pack) => [
+    `- ${pack.title}`,
+    ...pack.items.map((item) => `  - ${item}`)
+  ].join("\n")).join("\n");
+}
+
 function rollbackConcern(categories: readonly RiskCategory[]): string {
   if (categories.includes("migrations")) return "Database changes may not roll back cleanly.";
   if (categories.includes("deployment")) return "Deployment configuration changed; confirm previous release can be restored.";
@@ -193,12 +233,16 @@ function notVerifiedItems(facts: RepoFacts, verified: readonly CommandResult[]):
   return items.length > 0 ? items : ["No additional local checks were discovered."];
 }
 
-function recommendedSteps(facts: RepoFacts, verified: readonly CommandResult[]): readonly string[] {
+function recommendedSteps(facts: RepoFacts, verified: readonly CommandResult[], smokeResults: readonly SmokeResult[]): readonly string[] {
   const steps: string[] = [];
   const failed = verified.filter((result) => result.exitCode !== 0 || result.timedOut);
 
   if (failed.length > 0) {
     steps.push("Fix failing or timed-out verification commands before release.");
+  }
+
+  if (smokeResults.some((result) => !result.ok)) {
+    steps.push("Fix failing smoke checks or confirm the target URL is expected to be unavailable.");
   }
 
   for (const command of facts.commands) {
