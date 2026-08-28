@@ -1,20 +1,14 @@
-import type { CommandResult, RepoFacts, RiskCategory } from "./types.js";
+import type { CommandResult, GitHubFacts, RepoFacts, ReportSummary, RiskCategory, RiskFinding } from "./types.js";
 
 export function renderReport(facts: RepoFacts, verified: readonly CommandResult[]): string {
-  const status = chooseStatus(facts, verified);
-  const mainRisk = facts.riskCategories.length > 0
-    ? describeMainRisk(facts.riskCategories)
-    : "No high-signal risky file category detected from changed paths.";
-  const confidence = verified.length > 0 && verified.every((result) => result.exitCode === 0 && !result.timedOut)
-    ? "Medium: local checks ran successfully, but deployment/runtime state was not verified."
-    : "Low: this report is based on repository inspection and recommended checks.";
+  const summary = buildSummary(facts, verified);
 
   return `# Production Readiness Report
 
 ## Summary
-- Status: ${status}
-- Main risk: ${mainRisk}
-- Confidence: ${confidence}
+- Status: ${formatStatus(summary.status)}
+- Main risk: ${summary.mainRisk}
+- Confidence: ${summary.confidence}
 
 ## Repository
 - Root: ${facts.root}
@@ -27,6 +21,9 @@ export function renderReport(facts: RepoFacts, verified: readonly CommandResult[
 - Files changed: ${facts.changedFiles.length === 0 ? "None detected" : String(facts.changedFiles.length)}
 ${bulletList(facts.changedFiles)}
 - Risk categories: ${facts.riskCategories.length === 0 ? "None detected" : facts.riskCategories.join(", ")}
+
+## Risk Findings
+${formatRiskFindings(facts.riskFindings)}
 
 ## Project Shape
 - Languages: ${facts.languages.length === 0 ? "Not detected" : facts.languages.join(", ")}
@@ -43,6 +40,9 @@ ${bulletList(facts.migrationFiles)}
 ## Verified
 ${verified.length === 0 ? "- No project commands were run. Use `readiness audit --run` to run discovered checks." : verified.map(formatCommandResult).join("\n")}
 
+## Remote Evidence
+${formatGitHubFacts(facts.github)}
+
 ## Not Verified
 ${notVerifiedItems(facts, verified).map((item) => `- ${item}`).join("\n")}
 
@@ -56,22 +56,65 @@ ${recommendedSteps(facts, verified).map((step, index) => `${index + 1}. ${step}`
 `;
 }
 
-function chooseStatus(facts: RepoFacts, verified: readonly CommandResult[]): "Not ready" | "Ready with caveats" | "Ready" {
+export function buildSummary(facts: RepoFacts, verified: readonly CommandResult[]): ReportSummary {
+  const status = chooseStatus(facts, verified);
+  return {
+    status,
+    mainRisk: facts.riskFindings.length > 0
+      ? describeMainRisk(facts.riskFindings)
+      : "No high-signal risky file category detected from changed paths.",
+    confidence: describeConfidence(facts, verified)
+  };
+}
+
+function chooseStatus(facts: RepoFacts, verified: readonly CommandResult[]): ReportSummary["status"] {
   if (verified.some((result) => result.exitCode !== 0 || result.timedOut)) {
-    return "Not ready";
+    return "not_ready";
   }
 
-  if (verified.length === 0 || facts.statusLines.length > 0 || facts.riskCategories.length > 0) {
-    return "Ready with caveats";
+  if (facts.github?.latestRun !== undefined && facts.github.latestRun.conclusion !== "success" && facts.github.latestRun.status === "completed") {
+    return "not_ready";
   }
 
+  if (verified.length === 0 || facts.statusLines.length > 0 || facts.riskFindings.length > 0 || facts.github?.latestRun === undefined) {
+    return "ready_with_caveats";
+  }
+
+  return "ready";
+}
+
+function formatStatus(status: ReportSummary["status"]): string {
+  if (status === "not_ready") return "Not ready";
+  if (status === "ready_with_caveats") return "Ready with caveats";
   return "Ready";
 }
 
-function describeMainRisk(categories: readonly RiskCategory[]): string {
+function describeConfidence(facts: RepoFacts, verified: readonly CommandResult[]): string {
+  if (verified.some((result) => result.exitCode !== 0 || result.timedOut)) {
+    return "Low: at least one local verification command failed or timed out.";
+  }
+
+  if (verified.length > 0 && facts.github?.latestRun?.conclusion === "success" && facts.statusLines.length === 0) {
+    return "High: local checks passed and the latest GitHub Actions run succeeded.";
+  }
+
+  if (verified.length > 0 && facts.github?.latestRun?.conclusion === "success") {
+    return "Medium: local checks passed and GitHub Actions passed for the latest committed revision, but the working tree has local changes.";
+  }
+
+  if (verified.length > 0) {
+    return "Medium: local checks ran successfully, but remote runtime/deployment state was not fully verified.";
+  }
+
+  return "Low: this report is based on repository inspection and recommended checks.";
+}
+
+function describeMainRisk(findings: readonly RiskFinding[]): string {
   const priority: readonly RiskCategory[] = ["secrets", "migrations", "auth", "billing", "webhooks", "deployment", "database", "routing"];
-  const category = priority.find((item) => categories.includes(item)) ?? categories[0];
-  return category === undefined ? "No main risk identified." : `Changes touch ${category}.`;
+  const finding = priority
+    .map((category) => findings.find((item) => item.category === category))
+    .find((item) => item !== undefined) ?? findings[0];
+  return finding === undefined ? "No main risk identified." : `${finding.title}.`;
 }
 
 function formatComparison(facts: RepoFacts): string {
@@ -87,6 +130,41 @@ function hasAny(values: readonly RiskCategory[], candidates: readonly RiskCatego
   return candidates.some((candidate) => values.includes(candidate));
 }
 
+function formatRiskFindings(findings: readonly RiskFinding[]): string {
+  if (findings.length === 0) {
+    return "- No risk findings from changed paths.";
+  }
+
+  return findings.map((finding) => [
+    `- ${finding.title} (${finding.severity})`,
+    `  Why it matters: ${finding.why}`,
+    `  Matched files: ${finding.matchedFiles.join(", ")}`
+  ].join("\n")).join("\n");
+}
+
+function formatGitHubFacts(github: GitHubFacts | undefined): string {
+  if (github === undefined) {
+    return "- GitHub readback was not requested. Use `--github` to read the latest Actions run when available.";
+  }
+
+  if (!github.available) {
+    return `- ${github.note ?? "GitHub readback was requested but unavailable."}`;
+  }
+
+  const lines = [`- Repository: ${github.repository ?? "Not detected"}`];
+  if (github.currentSha !== undefined) {
+    lines.push(`- Commit: ${github.currentSha.slice(0, 12)}`);
+  }
+  if (github.latestRun !== undefined) {
+    lines.push(`- Latest run: ${github.latestRun.name} / ${github.latestRun.status} / ${github.latestRun.conclusion || "no conclusion yet"}`);
+    lines.push(`- Run URL: ${github.latestRun.url}`);
+  } else {
+    lines.push(`- Latest run: Not found${github.note !== undefined ? ` (${github.note})` : ""}`);
+  }
+
+  return lines.join("\n");
+}
+
 function rollbackConcern(categories: readonly RiskCategory[]): string {
   if (categories.includes("migrations")) return "Database changes may not roll back cleanly.";
   if (categories.includes("deployment")) return "Deployment configuration changed; confirm previous release can be restored.";
@@ -100,7 +178,7 @@ function notVerifiedItems(facts: RepoFacts, verified: readonly CommandResult[]):
     .filter((command) => !verifiedCommands.has(command.command))
     .map((command) => `${command.command}: discovered in ${command.source}, but not run.`);
 
-  if (facts.ciFiles.length > 0) {
+  if (facts.ciFiles.length > 0 && facts.github?.latestRun === undefined) {
     items.push("CI status: local inspection found workflow files, but remote CI result was not checked.");
   }
 

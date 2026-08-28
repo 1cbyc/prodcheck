@@ -18,10 +18,16 @@ Run it before merging a risky branch:
 readiness audit --base origin/main --run
 ```
 
+Run only the cheap checks first when the repo has slow integration tests:
+
+```sh
+readiness audit --base origin/main --run-kind typecheck,lint
+```
+
 Run it before tagging or deploying a release candidate:
 
 ```sh
-readiness audit --base v0.1.0 --run --json-output readiness-report.json
+readiness audit --base v0.1.0 --run --github --json-output readiness-report.json
 ```
 
 ## What To Do With The Report
@@ -60,5 +66,7 @@ It does not prove:
 - third-party provider state matches local config.
 
 Those belong in future integrations or human-owned deployment steps.
+
+When `--github` is used, `prodcheck` reads the latest GitHub Actions run for the current branch through the `gh` CLI. That is useful evidence, but it is still not the same as proving the deployed service is healthy.
 
 The point is to say that clearly instead of letting the silence feel like confidence.

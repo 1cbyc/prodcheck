@@ -2,9 +2,10 @@
 import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { collectRepoFacts } from "./detect.js";
-import { renderReport } from "./report.js";
+import { collectGitHubFacts } from "./github.js";
+import { buildSummary, renderReport } from "./report.js";
 import { runProjectCommands } from "./runner.js";
-import type { CliOptions } from "./types.js";
+import type { CliOptions, ScriptKind } from "./types.js";
 
 async function main(argv: readonly string[]): Promise<void> {
   const [command, subcommand, ...rest] = argv;
@@ -17,9 +18,14 @@ async function main(argv: readonly string[]): Promise<void> {
   }
 
   const options = parseOptions(args);
-  const facts = await collectRepoFacts(process.cwd(), options.base);
+  const initialFacts = await collectRepoFacts(process.cwd(), options.base);
+  const githubFacts = options.github ? await collectGitHubFacts(initialFacts.root) : undefined;
+  const facts = githubFacts === undefined ? initialFacts : { ...initialFacts, github: githubFacts };
+  const commandsToRun = options.runKinds.length > 0
+    ? facts.commands.filter((command) => options.runKinds.includes(command.kind))
+    : facts.commands;
   const verified = options.run
-    ? await runProjectCommands(facts.commands, facts.root, options.maxCommandSeconds)
+    ? await runProjectCommands(commandsToRun, facts.root, options.maxCommandSeconds)
     : [];
   const report = renderReport(facts, verified);
   const outputPath = resolve(process.cwd(), options.output);
@@ -31,7 +37,7 @@ async function main(argv: readonly string[]): Promise<void> {
     const jsonOutputPath = resolve(process.cwd(), options.jsonOutput);
     const payload = {
       generatedAt: new Date().toISOString(),
-      status: getJsonStatus(facts.riskCategories.length, facts.statusLines.length, verified),
+      summary: buildSummary(facts, verified),
       facts,
       verified
     };
@@ -49,12 +55,19 @@ function parseOptions(args: readonly string[]): CliOptions {
   let output = "readiness-report.md";
   let jsonOutput: string | undefined;
   let run = false;
+  let github = false;
+  let runKinds: readonly ScriptKind[] = [];
   let maxCommandSeconds = 90;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--run") {
       run = true;
+      continue;
+    }
+
+    if (arg === "--github") {
+      github = true;
       continue;
     }
 
@@ -76,6 +89,13 @@ function parseOptions(args: readonly string[]): CliOptions {
       continue;
     }
 
+    if (arg === "--run-kind") {
+      runKinds = parseRunKinds(readOptionValue(args, index, arg));
+      run = true;
+      index += 1;
+      continue;
+    }
+
     if (arg === "--max-command-seconds") {
       const value = Number(readOptionValue(args, index, arg));
       if (!Number.isInteger(value) || value < 1) {
@@ -90,24 +110,8 @@ function parseOptions(args: readonly string[]): CliOptions {
   }
 
   return jsonOutput === undefined
-    ? { base, output, run, maxCommandSeconds }
-    : { base, output, jsonOutput, run, maxCommandSeconds };
-}
-
-function getJsonStatus(
-  riskCategoryCount: number,
-  statusLineCount: number,
-  verified: readonly { readonly exitCode: number | null; readonly timedOut: boolean }[]
-): "not_ready" | "ready_with_caveats" | "ready" {
-  if (verified.some((result) => result.exitCode !== 0 || result.timedOut)) {
-    return "not_ready";
-  }
-
-  if (verified.length === 0 || riskCategoryCount > 0 || statusLineCount > 0) {
-    return "ready_with_caveats";
-  }
-
-  return "ready";
+    ? { base, output, run, runKinds, github, maxCommandSeconds }
+    : { base, output, jsonOutput, run, runKinds, github, maxCommandSeconds };
 }
 
 function readOptionValue(args: readonly string[], index: number, optionName: string): string {
@@ -118,9 +122,22 @@ function readOptionValue(args: readonly string[], index: number, optionName: str
   return value;
 }
 
+function parseRunKinds(value: string): readonly ScriptKind[] {
+  const allowed = new Set<ScriptKind>(["test", "lint", "typecheck", "build", "check"]);
+  const kinds = value.split(",").map((item) => item.trim()).filter(Boolean);
+
+  for (const kind of kinds) {
+    if (!allowed.has(kind as ScriptKind)) {
+      throw new Error(`Unknown --run-kind value: ${kind}`);
+    }
+  }
+
+  return kinds as readonly ScriptKind[];
+}
+
 function printHelp(): void {
   console.log(`Usage:
-  readiness audit [--base main] [--output readiness-report.md] [--json-output report.json] [--run] [--max-command-seconds 90]
+  readiness audit [--base main] [--output readiness-report.md] [--json-output report.json] [--run] [--run-kind test,typecheck] [--github] [--max-command-seconds 90]
 
 Commands:
   readiness audit    Inspect the current git repository and write a readiness report.

@@ -25,7 +25,23 @@ test("report separates verified and recommended checks", () => {
     deploymentFiles: [],
     envFiles: [".env.example"],
     migrationFiles: [],
-    riskCategories: ["auth", "dependencies"]
+    riskCategories: ["auth", "dependencies"],
+    riskFindings: [
+      {
+        category: "auth",
+        severity: "high",
+        title: "Authentication or authorization path changed",
+        why: "Auth changes can lock users out, grant excess access, or break sessions.",
+        matchedFiles: ["src/auth/session.ts"]
+      },
+      {
+        category: "dependencies",
+        severity: "medium",
+        title: "Dependency manifest or lockfile changed",
+        why: "Dependency changes can alter runtime behavior, builds, security posture, or package resolution.",
+        matchedFiles: ["package-lock.json"]
+      }
+    ]
   };
 
   const report = renderReport(facts, [

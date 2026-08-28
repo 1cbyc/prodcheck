@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { listRepoFiles } from "./fs.js";
+import { findRiskFindings } from "./risk.js";
 import { runGit } from "./shell.js";
-import type { ComparisonFacts, ProjectCommand, RepoFacts, RiskCategory, ScriptKind } from "./types.js";
+import type { ComparisonFacts, ProjectCommand, RepoFacts, ScriptKind } from "./types.js";
 
 const SCRIPT_NAMES = {
   test: ["test"],
@@ -17,6 +18,7 @@ export async function collectRepoFacts(root: string, baseRef: string): Promise<R
   const files = await listRepoFiles(repoRoot);
   const comparison = await getComparisonFacts(repoRoot, baseRef);
   const changedFiles = await getChangedFiles(repoRoot, comparison);
+  const riskFindings = findRiskFindings(changedFiles);
 
   return {
     root: repoRoot,
@@ -32,7 +34,8 @@ export async function collectRepoFacts(root: string, baseRef: string): Promise<R
     deploymentFiles: files.filter(isDeploymentFile),
     envFiles: files.filter(isEnvSurface),
     migrationFiles: files.filter(isMigrationFile),
-    riskCategories: detectRiskCategories(changedFiles)
+    riskCategories: riskFindings.map((finding) => finding.category),
+    riskFindings
   };
 }
 
@@ -189,32 +192,6 @@ function isEnvSurface(file: string): boolean {
 
 function isMigrationFile(file: string): boolean {
   return /(^|\/)(migrations?|schema|prisma|alembic|db\/migrate)(\/|$)/i.test(file);
-}
-
-function detectRiskCategories(files: readonly string[]): readonly RiskCategory[] {
-  const categories = new Set<RiskCategory>();
-  const rules: ReadonlyArray<readonly [RiskCategory, RegExp]> = [
-    ["auth", /auth|login|session|oauth|jwt|permission|rbac/i],
-    ["billing", /billing|checkout|subscription|invoice|payment|stripe|polar/i],
-    ["webhooks", /webhook|callback/i],
-    ["migrations", /migration|alembic|prisma|schema\.sql|db\/migrate/i],
-    ["deployment", /(^|\/)(Dockerfile|docker-compose[^/]*\.ya?ml|fly\.toml|render\.ya?ml|vercel\.json|netlify\.toml|wrangler\.toml|Procfile)$|^(deploy|deployment|infra|infrastructure|terraform|k8s|kubernetes|helm|charts)(\/|$)|(^|\/)\.github\/workflows\/.*(deploy|release|publish).*\.ya?ml$/i],
-    ["secrets", /\.env|secret|token|credential|private[_-]?key/i],
-    ["routing", /routes?|router|middleware|app\/.*page|pages\/|api\//i],
-    ["dependencies", /package-lock|pnpm-lock|yarn\.lock|bun\.lock|requirements|poetry\.lock|go\.sum|Cargo\.lock/i],
-    ["database", /database|db\/|models?|repository|sql/i],
-    ["ci", /\.github\/workflows|gitlab-ci|circleci/i],
-    ["frontend", /src\/.*\.(tsx|jsx)|app\/.*\.(tsx|jsx)|pages\/.*\.(tsx|jsx)|components\/.*\.(tsx|jsx)/i],
-    ["backend", /server|api\/|controllers?|services?|workers?|jobs?/i]
-  ];
-
-  for (const file of files) {
-    for (const [category, pattern] of rules) {
-      if (pattern.test(file)) categories.add(category);
-    }
-  }
-
-  return [...categories].sort();
 }
 
 function readScripts(value: unknown): Record<string, string> {

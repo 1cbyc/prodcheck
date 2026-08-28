@@ -40,7 +40,8 @@ test("cli can write markdown and json reports", async () => {
 
   assert.match(markdown, /# Production Readiness Report/);
   assert.ok(isRecord(json));
-  assert.equal(json.status, "ready_with_caveats");
+  assert.ok(isRecord(json.summary));
+  assert.equal(json.summary.status, "ready_with_caveats");
 });
 
 async function createGitRepo(): Promise<string> {
