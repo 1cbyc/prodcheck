@@ -13,6 +13,11 @@ async function main(argv: readonly string[]): Promise<void> {
   const [command, subcommand, ...rest] = argv;
   const args = command === "audit" ? argv.slice(1) : rest;
 
+  if (isHelpRequest(command, subcommand, args, rest)) {
+    printHelp();
+    return;
+  }
+
   if (command !== "audit" && ((command !== "readiness" && command !== "prodcheck") || subcommand !== "audit")) {
     printHelp();
     process.exitCode = 1;
@@ -59,6 +64,18 @@ async function main(argv: readonly string[]): Promise<void> {
   if (!effectiveOptions.run && facts.commands.length > 0) {
     console.log("Discovered commands were not run. Re-run with --run to verify them.");
   }
+}
+
+function isHelpRequest(
+  command: string | undefined,
+  subcommand: string | undefined,
+  args: readonly string[],
+  rest: readonly string[]
+): boolean {
+  if (command === "--help" || command === "-h") return true;
+  if (command === "audit") return args[0] === "--help" || args[0] === "-h";
+  if (subcommand === "audit") return rest[0] === "--help" || rest[0] === "-h";
+  return false;
 }
 
 function parseOptions(args: readonly string[]): CliOptions {

@@ -1,6 +1,6 @@
 {
   "name": "prodcheck",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local production-readiness reports for repositories and release candidates.",
   "type": "module",
   "bin": {

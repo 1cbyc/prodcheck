@@ -44,6 +44,18 @@ test("cli can write markdown and json reports", async () => {
   assert.equal(json.summary.status, "ready_with_caveats");
 });
 
+test("cli prints help for audit command", async () => {
+  const result = await execFileAsync("node", [
+    join(process.cwd(), "dist", "cli.js"),
+    "audit",
+    "--help"
+  ]);
+
+  assert.match(result.stdout, /Usage:/);
+  assert.match(result.stdout, /readiness audit/);
+  assert.equal(result.stderr, "");
+});
+
 test("repo-root config is used when auditing from a subdirectory", async () => {
   const root = await createGitRepo();
   await mkdir(join(root, "src"), { recursive: true });
